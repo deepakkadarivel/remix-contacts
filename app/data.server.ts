@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 import { matchSorter } from "match-sorter";
+import QueryString from "qs";
 // @ts-expect-error - no types, but it's a tiny function
 import sortBy from "sort-by";
 import invariant from "tiny-invariant";
@@ -22,80 +23,138 @@ export type ContactRecord = ContactMutation & {
   createdAt: string;
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// This is just a fake DB table. In a real app you'd be talking to a real db or
-// fetching from an existing API.
-const fakeContacts = {
-  records: {} as Record<string, ContactRecord>,
+export function flattenAttributes(data: any): any {
+  // Base case for recursion
+  if (!data) return null;
 
-  async getAll(): Promise<ContactRecord[]> {
-    return Object.keys(fakeContacts.records)
-      .map((key) => fakeContacts.records[key])
-      .sort(sortBy("-createdAt", "last"));
-  },
-
-  async get(id: string): Promise<ContactRecord | null> {
-    return fakeContacts.records[id] || null;
-  },
-
-  async create(values: ContactMutation): Promise<ContactRecord> {
-    const id = values.id || Math.random().toString(36).substring(2, 9);
-    const createdAt = new Date().toISOString();
-    const newContact = { id, createdAt, ...values };
-    fakeContacts.records[id] = newContact;
-    return newContact;
-  },
-
-  async set(id: string, values: ContactMutation): Promise<ContactRecord> {
-    const contact = await fakeContacts.get(id);
-    invariant(contact, `No contact found for ${id}`);
-    const updatedContact = { ...contact, ...values };
-    fakeContacts.records[id] = updatedContact;
-    return updatedContact;
-  },
-
-  destroy(id: string): null {
-    delete fakeContacts.records[id];
-    return null;
-  },
-};
-
-////////////////////////////////////////////////////////////////////////////////
-// Handful of helper functions to be called from route loaders and actions
-export async function getContacts(query?: string | null) {
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  let contacts = await fakeContacts.getAll();
-  if (query) {
-    contacts = matchSorter(contacts, query, {
-      keys: ["first", "last"],
-    });
+  // Handling array data
+  if (Array.isArray(data)) {
+    return data.map(flattenAttributes);
   }
-  return contacts.sort(sortBy("last", "createdAt"));
+
+  let flattened: { [key: string]: any } = {};
+
+  // Handling attributes
+  if (data.attributes) {
+    for (const key in data.attributes) {
+      if (
+        typeof data.attributes[key] === "object" &&
+        data.attributes[key] !== null &&
+        "data" in data.attributes[key]
+      ) {
+        flattened[key] = flattenAttributes(data.attributes[key].data);
+      } else {
+        flattened[key] = data.attributes[key];
+      }
+    }
+  }
+
+  // Copying non-attributes and non-data properties
+  for (const key in data) {
+    if (key !== "attributes" && key !== "data") {
+      flattened[key] = data[key];
+    }
+  }
+
+  // Handling nested data
+  if (data.data) {
+    flattened = { ...flattened, ...flattenAttributes(data.data) };
+  }
+
+  return flattened;
 }
 
-export async function createEmptyContact() {
-  const contact = await fakeContacts.create({});
-  return contact;
+const url = process.env.STRAPI_URL || "http://127.0.0.1:1337";
+
+export async function getContacts(q?: string | null) {
+  try {
+    const query = QueryString.stringify({
+      filters: {
+        $or: [
+          { first: { $contains: q ?? "" } },
+          { last: { $contains: q ?? "" } },
+          { twitter: { $contains: q ?? "" } },
+        ],
+      },
+      pagination: {
+        pageSize: 10,
+        page: 1,
+      },
+    });
+
+    const response = await fetch(url + "/api/contacts?" + query);
+    const data = await response.json();
+    const flattenAttributesData = flattenAttributes(data.data);
+    return flattenAttributesData;
+  } catch (error) {
+    console.log(error);
+    // throw new Error("Oh no! some issue with the server");
+    throw new Response("Oh no! some issue with the server", {
+      status: 500,
+      statusText: "This is a custom server error.",
+    });
+  }
+}
+
+export async function createContact(data: any) {
+  try {
+    const response = await fetch(url + "/api/contacts/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ data: { ...data } }),
+    });
+    const responseData = await response.json();
+    const flattenAttributesData = flattenAttributes(responseData.data);
+    return flattenAttributesData;
+  } catch (error) {
+    console.log(error);
+  }
 }
 
 export async function getContact(id: string) {
-  return fakeContacts.get(id);
+  try {
+    const response = await fetch(url + "/api/contacts/" + id);
+    const data = await response.json();
+    const flattenAttributesData = flattenAttributes(data.data);
+    return flattenAttributesData;
+  } catch (error) {
+    console.log(error);
+  }
 }
 
 export async function updateContact(id: string, updates: ContactMutation) {
-  const contact = await fakeContacts.get(id);
-  if (!contact) {
-    throw new Error(`No contact found for ${id}`);
+  try {
+    const response = await fetch(url + "/api/contacts/" + id, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ data: { ...updates } }),
+    });
+    const responseData = await response.json();
+    const flattenAttributesData = flattenAttributes(responseData.data);
+    return flattenAttributesData;
+  } catch (error) {
+    console.log(error);
   }
-  await fakeContacts.set(id, { ...contact, ...updates });
-  return contact;
 }
 
 export async function deleteContact(id: string) {
-  fakeContacts.destroy(id);
+  try {
+    const response = await fetch(url + "/api/contacts/" + id, {
+      method: "DELETE",
+    });
+    const responseData = await response.json();
+    const flattenAttributesData = flattenAttributes(responseData.data);
+    return flattenAttributesData;
+  } catch (error) {
+    console.log(error);
+  }
 }
 
-[
+const data = [
   {
     avatar:
       "https://sessionize.com/image/124e-400o400o2-wHVdAuNaxi8KJrgtN3ZKci.jpg",
@@ -308,9 +367,4 @@ export async function deleteContact(id: string) {
     last: "Jensen",
     twitter: "@jenseng",
   },
-].forEach((contact) => {
-  fakeContacts.create({
-    ...contact,
-    id: `${contact.first.toLowerCase()}-${contact.last.toLocaleLowerCase()}`,
-  });
-});
+];
